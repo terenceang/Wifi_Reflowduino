@@ -6,7 +6,7 @@
  *
  * -----------------------------------------------------------------------------------------------
  * Credits: Original Code from Timothy Woo
- * Website: www.botletics.com 
+ * Website: www.botletics.com
  * Special thanks to all those who have been an invaluable part of the DIY community,
  * like the author of the Arduino PID library and the developers at Adafruit!
  * Thanks to Timothy Woo
@@ -23,17 +23,19 @@
  * might occur involving the use of the Reflowduino and all actions are taken at your own risk.
  */
 
+#include <ArduinoOTA.h>
+#include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
-#include <ESP8266WiFiMulti.h>
+#include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-#include <ESP8266mDNS.h>
 #include <FS.h>
 #include <Adafruit_MAX31865.h> // PT100 RTD Temprature Sensor
 #include <PID_v1.h> // Library for PID control
 #include "pitches.h" // Includes the different notes for the buzzer
+#include "states.h"
 
 #define DEBUG
-// Define pins
+ // Define pins
 #define buzzer D1
 #define relay D2
 #define LED D3 // This LED is used to indicate if the reflow process is underway
@@ -45,10 +47,10 @@
 // If needed, define a subtraction constant to compensate for overshoot:
 #define T_const 5 // From testing, overshoot was about 5-6*C
 
-// Test Profile 100%
-#define T_preheat 50
-#define T_soak 80
-#define T_reflow 100 - T_const
+// SN63/Pb37 Profile
+#define T_preheat 125
+#define T_soak 183
+#define T_reflow 215 - T_const
 
 // Standard lead-free solder paste (melting point around 215*C)
 //#define T_preheat 150
@@ -89,39 +91,11 @@
 
 double temperature, output, setPoint; // Input, output, set point
 PID myPID(&temperature, &output, &setPoint, Kp_preheat, Ki_preheat, Kd_preheat, DIRECT);
+double max_temp = 0;
 
-ESP8266WiFiMulti wifiMulti;     // Create an instance of the ESP8266WiFiMulti class, called 'wifiMulti'
+reflow_state status = idle;
+reflow_state previous_status;
 
-ESP8266WebServer server(80);    // Create a webserver object that listens for HTTP request on port 80
-File fsUploadFile;                                    // a File variable to temporarily store the received file
-
-const char* mdnsName = "reflowduino";        // Domain name for the mDNS responder
-
-void handleRoot();              // function prototypes for HTTP handlers
-void handleNotFound();
-
-// Buzzer settings
-// This melody plays when the reflow temperature is reached,
-// at which point you should open the door (for toaster ovens)
-//int openDoorTune[] = {
-//  NOTE_G6 // I found that NOTE_G6 catches my attention pretty well
-//};
-
-// This melody plays at the very end when it's safe to take your PCB's!
-int doneDealMelody[] = { NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, 0, NOTE_B3, NOTE_C4 };
-
-// Note durations: 4 = quarter note, 8 = eighth note, etc.
-int noteDurations[] = { 4, 8, 8, 4, 4, 4, 4, 4 };
-
-const char* status = "idle";
-
-// Logic flags
-bool justStarted = true;
-bool reflow = false; // Baking process is underway!
-bool preheatComplete = false;
-bool soakComplete = false;
-bool reflowComplete = false;
-bool coolComplete = false;
 bool key_beep = false;
 
 // Use software SPI: CS, DI, DO, CLK
@@ -135,20 +109,6 @@ Adafruit_MAX31865 PT_Sensor = Adafruit_MAX31865(D4);
 // 100.0 for PT100, 1000.0 for PT1000
 #define RNOMINAL  100.0
 
-void toggle_sw() {
-	key_beep = true;
-	reflow = !reflow;
-	if (!reflow) {
-		status = "idle";
-		// Logic flags reset
-		justStarted = true;
-		reflow = false; // Baking process is underway!
-		preheatComplete = false;
-		soakComplete = false;
-		reflowComplete = false;
-		coolComplete = false;
-	}
-}
 
 double T_start; // Starting temperature before reflow process
 int windowSize = 2000;
@@ -156,6 +116,7 @@ unsigned long sendRate = 2000; // Send data to app every 2s
 unsigned long t_start = 0; // For keeping time during reflow process
 unsigned long previousMillis = 0;
 unsigned long duration, t_final, windowStartTime, timer;
+unsigned long preheat_duration, soak_duration, reflow_duration, cool_duration;
 
 #ifdef DEBUG
 #define Report_delay 2000
@@ -163,9 +124,92 @@ unsigned long debug_previous = 0;
 
 #endif // DEBUG
 
+//Wifi setup
+const char* ssid = "DHIOTS";
+const char* password = "IOTConnect456";
+ESP8266WebServer server(80);   //instantiate server at port 80 (http port)
+
+String page = "";
+String text = "";
+double data;
+
+StaticJsonBuffer<200> jsonBuffer;
+JsonObject& root = jsonBuffer.createObject();
+char JSONmessageBuffer[300];
 
 void setup() {
 	Serial.begin(115200); // This should be different from the Bluetooth baud rate
+	while (!Serial) continue;
+
+
+
+	WiFi.begin(ssid, password); //begin WiFi connection
+	Serial.println("");
+
+	// Wait for connection
+	while (WiFi.status() != WL_CONNECTED) {
+		delay(500);
+		Serial.print(".");
+	}
+
+	Serial.println("");
+	Serial.print("Connected to ");
+	Serial.println(ssid);
+	Serial.print("IP address: ");
+	Serial.println(WiFi.localIP());
+
+	// Port defaults to 8266
+	// ArduinoOTA.setPort(8266);
+
+	// Hostname defaults to esp8266-[ChipID]
+	// ArduinoOTA.setHostname("myesp8266");
+
+	// No authentication by default
+	// ArduinoOTA.setPassword((const char *)"123");
+
+	ArduinoOTA.onStart([]() {
+		Serial.println("Start");
+	});
+
+	ArduinoOTA.onEnd([]() {
+		Serial.println("\nEnd");
+	});
+
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+		Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+	});
+
+	ArduinoOTA.onError([](ota_error_t error) {
+		Serial.printf("Error[%u]: ", error);
+		if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+		else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+		else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+		else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+		else if (error == OTA_END_ERROR) Serial.println("End Failed");
+	});
+
+	ArduinoOTA.begin();
+
+	if (!SPIFFS.begin())
+	{
+		// Serious problem
+		Serial.println("SPIFFS Mount failed");
+	}
+	else {
+		Serial.println("SPIFFS Mount succesfull");
+	}
+
+	server.serveStatic("/", SPIFFS, "/index.html");
+
+
+	server.on("/data.json", []() {
+		root.printTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
+		//Serial.println(JSONmessageBuffer);
+		server.send(200, "application/json", JSONmessageBuffer);
+	});
+
+	server.begin();
+	Serial.println("Web server started!");
 
 #ifdef buzzer
 	pinMode(buzzer, OUTPUT);
@@ -175,7 +219,7 @@ void setup() {
 #endif // buzzer
 
 	//playTune(doneDealMelody); // Play the buzzer melody
-	
+
 	pinMode(LED, OUTPUT);
 	pinMode(relay, OUTPUT);
 
@@ -192,187 +236,107 @@ void setup() {
 
   //  while (!Serial) delay(1); // OPTIONAL: Wait for serial to connect
 	Serial.println("*****Wifi Reflowduino*****");
-	
-	wifiMulti.addAP("DHIOTS", "IOTConnect456");   // add Wi-Fi networks you want to connect to
-	//wifiMulti.addAP("ssid_from_AP_2", "your_password_for_AP_2");
-	//wifiMulti.addAP("ssid_from_AP_3", "your_password_for_AP_3");
-
-	Serial.println("Connecting ...");
-	int i = 0;
-	while (wifiMulti.run() != WL_CONNECTED) { // Wait for the Wi-Fi to connect: scan for Wi-Fi networks, and connect to the strongest of the networks above
-		delay(250);
-		Serial.print('.');
-	}
-	Serial.println('\n');
-	Serial.print("Connected to ");
-	Serial.println(WiFi.SSID());              // Tell us what network we're connected to
-	Serial.print("IP address:\t");
-	Serial.println(WiFi.localIP());           // Send the IP address of the ESP8266 to the computer
-
-	if (MDNS.begin("esp8266")) {              // Start the mDNS responder for esp8266.local
-		Serial.println("mDNS responder started");
-	}
-	else {
-		Serial.println("Error setting up MDNS responder!");
-	}
-
-	server.on("/", handleRoot);               // Call the 'handleRoot' function when a client requests URI "/"
-	server.onNotFound(handleNotFound);        // When a client requests an unknown URI (i.e. something other than "/"), call function "handleNotFound"
-
-	server.begin();                           // Actually start the server
-	Serial.println("HTTP server started");
 }
 
 void loop() {
+	ArduinoOTA.handle();
 	/***************************** MEASURE TEMPERATURE *****************************/
 	temperature = PT_Sensor.temperature(RNOMINAL, RREF);
+	if (temperature > max_temp) max_temp = temperature;
+	root["temp"] = temperature;
+	root["max_temp"] = max_temp;
+	root["phase"] = states_name[status];
+
 	uint8_t fault = PT_Sensor.readFault();
 
-	/***************************** REFLOW PROCESS CODE *****************************/
-	if (reflow) {
+	if (fault) status = rtd_fault;
+
+	// Process
+	switch (status)
+	{
+	case idle:
+		digitalWrite(LED, LOW); // Red LED indicates reflow is underway
+		setPoint = 0;
+		break;
+
+	case preheat:
 		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 
-		// This only runs when you first start the reflow process
-		if (justStarted) {
-			justStarted = false;
-
-			t_start = millis(); // Begin timers
-			windowStartTime = millis();
-			T_start = temperature;
-
-			if (fault) {
-				Serial.println("Invalid reading, check RTD!");
-				status = "fault";
-			}
-			else {
-				status = "Preheat";
-				Serial.print("Starting temperature: ");
-				Serial.print(T_start);
-				Serial.println(" *C");
-			}
+		if (temperature >= T_preheat) { // Check if the current phase was just completed
+			status = soak;
+			duration = millis() - t_start; // reset duration for the next phase
+			preheat_duration = duration; // record preheat duration
+			t_start = millis(); // Reset timer for next phase
+			myPID.SetTunings(Kp_soak, Ki_soak, Kd_soak); // set tuning for next phase
+			Serial.print("Preheat phase complete : ");
+			Serial.println(preheat_duration);
+			phase_beep();
+		}
+		else {
+			// Calculate the projected final time based on temperature points and temperature rates
+			t_final = (T_preheat - T_start) / preheat_rate + t_start;
+			// Calculate desired temperature at that instant in time using linear interpolation
+			setPoint = duration * (T_preheat - T_start) / (t_final - t_start);
 		}
 
-		// Determine the amount of time that elapsed in any particular phase (preheat, soak, etc)
-		duration = millis() - t_start;
+		break;
 
-		// Determine the desired set point according to where are in the reflow process
-		// Perform a linear extrapolation of what desired temperature we want to be at.
-		/********************* PREHEAT *********************/
-		if (!preheatComplete) {
-			if (temperature >= T_preheat) { // Check if the current phase was just completed
-				status = "Soaking";
-				preheatComplete = true;
-				t_start = millis(); // Reset timer for next phase
-				Serial.println("Preheat phase complete!");
-				tone(buzzer, NOTE_C3, 100);
-				delay(100);
-				noTone(buzzer);
-			}
-			else {
-				// Calculate the projected final time based on temperature points and temperature rates
-				t_final = (T_preheat - T_start) / preheat_rate + t_start;
-				// Calculate desired temperature at that instant in time using linear interpolation
-				setPoint = duration * (T_preheat - T_start) / (t_final - t_start);
-			}
+	case soak:
+		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+		if (temperature >= T_soak) {
+			status = reflow;
+			t_start = millis(); // Reset timer for next phase
+			duration = millis() - t_start; // reset duration for the next phase
+			soak_duration = duration; // record preheat duration
+			myPID.SetTunings(Kp_reflow, Ki_reflow, Kd_reflow); // set tuning for next phase
+			Serial.println("Soaking phase complete : ");
+			Serial.println(preheat_duration);
+			phase_beep();
 		}
-		/********************* SOAK *********************/
-		else if (!soakComplete) {
-			if (temperature >= T_soak) {
-				status = "reflow";
-				soakComplete = true;
-				t_start = millis();
-				Serial.println("Soaking phase complete!");
-				tone(buzzer, NOTE_C3, 100);
-				delay(100);
-				noTone(buzzer);
-			}
-			else {
-				t_final = (T_soak - T_start) / soak_rate + t_start;
-				setPoint = duration * (T_soak - T_start) / (t_final - t_start);
-			}
+		else {
+			t_final = (T_soak - T_start) / soak_rate + t_start;
+			setPoint = duration * (T_soak - T_start) / (t_final - t_start);
 		}
-		/********************* REFLOW *********************/
-		else if (!reflowComplete) {
-			if (temperature >= T_reflow) {
-				status = "Cooling";
-				reflowComplete = true;
-#ifdef buzzer
-				tone(buzzer, NOTE_G3, 2000); // Alert the user to open the door!
-				delay(2000);
-				noTone(buzzer);
-#endif
-				t_start = millis();
-				Serial.println("Reflow phase complete!");
-			}
-			else {
-				t_final = (T_reflow - T_start) / reflow_rate + t_start;
-				setPoint = duration * (T_reflow - T_start) / (t_final - t_start);
-			}
+		break;
+
+	case reflow:
+		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+		if (temperature >= T_reflow) {
+			status = cool;
+			t_start = millis(); // Reset timer for next phase
+			duration = millis() - t_start; // reset duration for the next phase
+			reflow_duration = duration; // record preheat duration
+			myPID.SetTunings(Kp_preheat, Ki_preheat, Kd_preheat); // set tuning for next phase
+			Serial.print("Reflow phase complete : ");
+			Serial.println(reflow_duration);
+			Serial.println("Open the door! ");
+			Door_Beep();
 		}
-		/********************* COOLDOWN *********************/
-		else if (!coolComplete) {
-			if (temperature <= T_cool) {
-				status = "idle";
-				coolComplete = true;
-				reflow = false;
-				Serial.println("PCB reflow complete!");
-#ifdef buzzer
-				playTune(doneDealMelody); // Play the buzzer melody
-#endif
-			}
-			else {
-				t_final = (T_cool - T_start) / cool_rate + t_start;
-				setPoint = duration * (T_cool - T_start) / (t_final - t_start);
-			}
+		else {
+			t_final = (T_reflow - T_start) / reflow_rate + t_start;
+			setPoint = duration * (T_reflow - T_start) / (t_final - t_start);
 		}
 
-		// Use the appropriate PID parameters based on the current phase
-		if (!soakComplete) myPID.SetTunings(Kp_soak, Ki_soak, Kd_soak);
-		else if (!reflowComplete) myPID.SetTunings(Kp_reflow, Ki_reflow, Kd_reflow);
+		break;
 
-		// Compute PID output (from 0 to windowSize) and control relay accordingly
-		myPID.Compute(); // This will only be evaluated at the PID sampling rate
-		if (millis() - windowStartTime >= windowSize) windowStartTime += windowSize; // Shift the time window
-		if (output > millis() - windowStartTime) digitalWrite(relay, HIGH); // If HIGH turns on the relay
-	//    if (output < millis() - windowStartTime) digitalWrite(relay, HIGH); // If LOW turns on the relay
-		else digitalWrite(relay, LOW);
-	}
-	else {
-		digitalWrite(LED, LOW);
-		digitalWrite(relay, LOW);
-	}
+	case cool:
+		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 
-	server.handleClient();                    // Listen for HTTP requests from clients
+		if (temperature <= T_cool) {
+			status = idle;
+			cool_duration = millis() - t_start; // reset duration for the next phase
+			Serial.println("Cooling complete : ");
+			Serial.println(cool_duration);
+			Done_Beep(); // Play the buzzer melody
+		}
+		else {
+			digitalWrite(relay, LOW); //cooling - just turn off the heaters.
+			setPoint = 0;
+		}
+		break;
 
-#ifdef DEBUG
-	if (millis() > debug_previous + Report_delay) {
-		debug_previous = millis();
-		//uint16_t rtd = PT_Sensor.readRTD();
-		//float ratio = rtd;
-		//ratio /= 32768;
-
-		//Serial.print("RTD value: "); Serial.println(rtd);
-		//Serial.print("Ratio = "); Serial.println(ratio, 8);
-		//Serial.print("Resistance = "); Serial.println(RREF*ratio, 8);
-
-		//Serial.println();
-		Serial.print("Temperature = "); Serial.println(temperature);
-		Serial.print("PID Output = "); Serial.println(output);
-
-		Serial.print("Reflow switch is ");
-
-		if (reflow) Serial.println("ON");
-		else Serial.println("OFF");
-
-		Serial.print("Reflow Status is ");
-		Serial.println(status);
-		Serial.println();
-	}
-
-
-	// Check and print any faults
-	if (fault) {
-		reflow = 0; //shutdon on fault.
+	case rtd_fault:
+		Serial.println("Invalid reading, check RTD!");
 		Serial.print("Fault 0x"); Serial.println(fault, HEX);
 		if (fault & MAX31865_FAULT_HIGHTHRESH) {
 			Serial.println("RTD High Threshold");
@@ -396,10 +360,46 @@ void loop() {
 		tone(buzzer, NOTE_C3, 2000);
 		delay(2000);
 		noTone(buzzer);
-		
+
 		PT_Sensor.clearFault();
 		Serial.println();
+		break;
 	}
+
+	duration = millis() - t_start; // reset duration for the next phase
+
+	// Compute PID output (from 0 to windowSize) and control relay accordingly
+	myPID.Compute(); // This will only be evaluated at the PID sampling rate
+
+	if (millis() - windowStartTime >= windowSize) windowStartTime += windowSize; // Shift the time window
+
+	if (output > millis() - windowStartTime) digitalWrite(relay, HIGH); // If HIGH turns on the relay
+	else digitalWrite(relay, LOW);
+
+#ifdef DEBUG
+	if (millis() > debug_previous + Report_delay) {
+		debug_previous = millis();
+		//uint16_t rtd = PT_Sensor.readRTD();
+		//float ratio = rtd;
+		//ratio /= 32768;
+
+		//Serial.print("RTD value: "); Serial.println(rtd);
+		//Serial.print("Ratio = "); Serial.println(ratio, 8);
+		//Serial.print("Resistance = "); Serial.println(RREF*ratio, 8);
+
+		//Serial.println();
+		Serial.print("Temperature = "); Serial.println(temperature);
+		Serial.print("Max Temperature = "); Serial.println(max_temp);
+		Serial.print("Setpoint = "); Serial.println(setPoint);
+		Serial.print("Duration = "); Serial.println(duration / 1000);
+		Serial.print("PID Output = "); Serial.println(output);
+
+		Serial.print("Reflow Status is "); Serial.println(states_name[status]);
+		Serial.println(states_name[status]);
+		Serial.println();
+	}
+
+	server.handleClient();
 
 #endif // DEBUG
 
@@ -411,17 +411,22 @@ void loop() {
 	}
 }
 
-// This function plays the melody for the buzzer.
-// Make this as simple or as elaborate as you wish!
-#ifdef buzzer
+///Beeps
 
-void playTune(int *melody) {
+void Door_Beep() {
+
+	// This melody plays at the very end when it's safe to take your PCB's!
+	int Melody[] = { NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, 0, NOTE_B3, NOTE_C4 };
+
+	// Note durations: 4 = quarter note, 8 = eighth note, etc.
+	int noteDurations[] = { 4, 8, 8, 4, 4, 4, 4, 4 };
+
 	// Iterate over the notes of the melody:
 	for (int thisNote = 0; thisNote < 8; thisNote++) {
 		// To calculate the note duration, take one second divided by the note type
 		// e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
 		int noteDuration = 1000 / noteDurations[thisNote];
-		tone(buzzer, melody[thisNote], noteDuration);
+		tone(buzzer, Melody[thisNote], noteDuration);
 
 		// To distinguish the notes, set a minimum time between them.
 		// the note's duration + 30% seems to work well:
@@ -431,12 +436,49 @@ void playTune(int *melody) {
 		noTone(buzzer);
 	}
 }
-#endif // buzzer
 
-void handleRoot() {
-	server.send(200, "text/plain", "Hello world!");   // Send HTTP status 200 (Ok) and send some text to the browser/client
+void Done_Beep() {
+
+	// This melody plays at the very end when it's safe to take your PCB's!
+	int Melody[] = { NOTE_C4, NOTE_G3, NOTE_G3, NOTE_A3, NOTE_G3, 0, NOTE_B3, NOTE_C4 };
+
+	// Note durations: 4 = quarter note, 8 = eighth note, etc.
+	int noteDurations[] = { 4, 8, 8, 4, 4, 4, 4, 4 };
+
+	// Iterate over the notes of the melody:
+	for (int thisNote = 0; thisNote < 8; thisNote++) {
+		// To calculate the note duration, take one second divided by the note type
+		// e.g. quarter note = 1000 / 4, eighth note = 1000/8, etc.
+		int noteDuration = 1000 / noteDurations[thisNote];
+		tone(buzzer, Melody[thisNote], noteDuration);
+
+		// To distinguish the notes, set a minimum time between them.
+		// the note's duration + 30% seems to work well:
+		int pauseBetweenNotes = noteDuration * 1.30;
+		delay(pauseBetweenNotes);
+		// stop the tone playing:
+		noTone(buzzer);
+	}
 }
 
-void handleNotFound() {
-	server.send(404, "text/plain", "404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
+void phase_beep() {
+	tone(buzzer, NOTE_C3, 100);
+	delay(100);
+	noTone(buzzer);
+}
+
+
+void toggle_sw() {
+	key_beep = true;
+	if (status == idle) {
+		status = preheat;
+		t_start = millis(); // Begin timers
+		windowStartTime = millis();
+		T_start = temperature;
+		//duration = millis() - t_start; //set duration for preheat
+		Serial.print("Starting temperature: ");
+		Serial.print(T_start);
+		Serial.println(" *C");
+	}
+	else status = idle;
 }

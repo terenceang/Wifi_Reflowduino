@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>WiFi ReFlow Toaster</title>
+    <style>
+        html, body {
+            background-color: #333;
+        }
+
+        #container {
+            max-width: 1000px;
+            padding: 10px;
+            margin: auto;
+            margin-top: 40px;
+            background-color: #555;
+            border: 1px solid #dddddd
+        }
+
+        table {
+            font-family: arial, sans-serif;
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        td, th {
+            width: 200px;
+            font-size: 50px;
+            border: 1px solid #dddddd;
+            text-align: center;
+            padding: 10px;
+            background-color: #666;
+        }
+
+        td {
+            background-color: #888;
+        }
+
+        h1 {
+            text-align: center;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 50px;
+        }
+    </style>
+    <script type="text/javascript">
+        var x = setInterval(function () { loadData("data.json", updateData) }, 1000);
+
+        function loadData(url, callback) {
+            var xhttp = new XMLHttpRequest();
+            xhttp.onreadystatechange = function () {
+                if (this.readyState == 4 && this.status == 200) {
+                    callback.apply(xhttp);
+                }
+            };
+            xhttp.open("GET", url, true);
+            xhttp.send();
+        }
+
+        function updateData() {
+            var obj = JSON.parse(this.responseText);
+
+            document.getElementById("temp").innerHTML = obj.temp.toFixed(2) + String.fromCharCode(176) + "C";
+            document.getElementById("max_temp").innerHTML = obj.max_temp.toFixed(2) + String.fromCharCode(176) + "C";
+            document.getElementById("phase").innerHTML = obj.phase;
+        }
+
+    </script>
+</head>
+<body>
+    <div id="container">
+        <h1>Wifi Reflow Toaster</h1>
+        <table>
+            <tr>
+                <th>Current Temperature</th>
+                <th>Maximium Temperature</th>
+                <th>Status</th>
+            </tr>
+            <tr>
+                <td id="temp">00.00&deg;C</td>
+                <td id="max_temp">00.00&deg;C</td>
+                <td id="phase">idle</td>
+            </tr>
+        </table>
+    </div>
+</body>
+</html>
