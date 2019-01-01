@@ -8,7 +8,7 @@
         }
 
         #container {
-            max-width: 1000px;
+            max-width: 1200px;
             padding: 10px;
             margin: auto;
             margin-top: 40px;
@@ -53,7 +53,7 @@
         google.charts.load('current', { 'packages': ['corechart'] });
 
         // Set a callback to run when the Google Visualization API is loaded.
-        //google.charts.setOnLoadCallback(updateData);
+        google.charts.setOnLoadCallback(Draw_Chart);
 
         var x = setInterval(function () { loadData("data.json", updateData) }, 1000);
 
@@ -82,65 +82,79 @@
             document.getElementById("phase").innerHTML = obj.phase;
 
             if (obj.phase == "ended" && chartFlag) {
-
                 chartFlag = false;
                 chartDelay = 10;
-
-                $.ajax({
-                    url: "chart.json",
-                    dataType: "json",
-                    success: function (chartData) {
-
-                        var data = new google.visualization.DataTable();
-
-                        data.addColumn('number', 'X');
-                        data.addColumn('number', "Temperature");
-
-                        for (var i = 0; i < chartData.time.length; i++) {
-                            data.addRow([chartData.time[i], chartData.temp[i]]);
-                        }
-
-                        var options = {
-                            hAxis: {
-                                title: 'Time',
-                                textStyle: {
-                                    color: '#01579b',
-                                    fontSize: 20,
-                                    fontName: 'Arial',
-                                    bold: true,
-                                    italic: true
-                                },
-                                titleTextStyle: {
-                                    color: '#01579b',
-                                    fontSize: 16,
-                                    fontName: 'Arial',
-                                    bold: false,
-                                    italic: true
-                                }
-                            },
-                            vAxis: {
-                                title: 'Temperture',
-                                textStyle: {
-                                    color: '#1a237e',
-                                    fontSize: 24,
-                                    bold: true
-                                },
-                                titleTextStyle: {
-                                    color: '#1a237e',
-                                    fontSize: 24,
-                                    bold: true
-                                }
-                            },
-                            colors: ['#a52714', '#097138']
-                        };
-
-                        var chart = new google.visualization.LineChart(document.getElementById('chart_div'));
-                        chart.draw(data, options);
-                    } //sucess
-                }); //ajax
+                Draw_Chart();
             } //if
         } //function
 
+        function Draw_Chart() {
+
+            $.ajax({
+                url: "chart.json",
+                dataType: "json",
+                success: function (chartData) {
+
+                    var data = new google.visualization.DataTable();
+
+                    data.addColumn('number', 'X');
+                    data.addColumn('number', "Temperature");
+
+                    for (var i = 0; i < chartData.time.length; i++) {
+                        data.addRow([chartData.time[i], chartData.temp[i]]);
+                    }
+
+                    var options_lines = {
+                        title: "Sn63/PB37 - Mechanic",
+                        'backgroundColor': '#999',
+                        titleTextStyle: {
+                            fontSize: 35,
+                            fontName: 'Arial',
+                            bold: true,
+                            italic: false
+                        },
+                        lineWidth: 4,
+                        intervals: { 'style': 'line' },
+                        legend: "none",
+                        hAxis: {
+                            title: 'Time in sec',
+                            textStyle: {
+                                color: '#01579b',
+                                fontSize: 25,
+                                fontName: 'Arial',
+                                bold: true,
+                                italic: true
+                            },
+                            titleTextStyle: {
+                                color: '#01579b',
+                                fontSize: 20,
+                                fontName: 'Arial',
+                                bold: false,
+                                italic: true
+                            }
+                        },
+                        vAxis: {
+                            title: 'Temperature - Celsius',
+                            textStyle: {
+                                color: '#1a237e',
+                                fontSize: 25,
+                                bold: true
+                            },
+                            titleTextStyle: {
+                                color: '#1a237e',
+                                fontSize: 24,
+                                bold: true
+                            }
+                        },
+                        'chartArea': { 'top': '15%', 'left': '12%', 'right': '10%' },
+                        colors: ['#a52714']
+                    };
+
+                    var chart_lines = new google.visualization.LineChart(document.getElementById('chart_lines'));
+                    chart_lines.draw(data, options_lines);
+                }
+            }); //ajax
+        }
     </script>
 </head>
 
@@ -160,7 +174,10 @@
             </tr>
         </table>
         <!--Div that will hold the pie chart-->
-        <div id="chart_div"></div>
+        <div id="chart_lines" style="width: 100%; height: 750px;"></div>
+
+        <!--<button onclick="Draw_Chart()">Test Chart</button>-->
+
     </div>
 
 </body>

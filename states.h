@@ -5,15 +5,21 @@ enum reflow_state {
 	soak,
 	reflow,
 	cool,
+	save_data,
 	ended,
 	rtd_fault
 };
 
 static const char *states_name[] = {
 "idle",
-"preheat",
-"soak",
+"preheating",
+"soaking",
 "reflow",
-"cool",
+"cooling",
+"saving data",
 "ended",
-"rtd_fault" };
+"RTD fault" };
+
+//States
+reflow_state status = idle;
+reflow_state previous_status;
