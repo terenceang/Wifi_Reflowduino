@@ -67,7 +67,7 @@
 //#define T_soak 80
 //#define T_reflow 100 - T_const
 
-#define T_cool 40 // Safe temperature at which the board is "ready" (dinner bell sounds!)
+#define T_cool 100 // Safe temperature at which the board is "ready" (dinner bell sounds!)
 #define preheat_rate 2 // Increase of 1-3 *C/s
 #define soak_rate 0.7 // Increase of 0.5-1 *C/s
 #define reflow_rate 2 // Increase of 1-3 *C/s
@@ -96,6 +96,7 @@ double max_temp = 0;
 reflow_state status = idle;
 reflow_state previous_status;
 
+bool cleararray = true;
 bool key_beep = false;
 
 // Use software SPI: CS, DI, DO, CLK
@@ -137,11 +138,17 @@ StaticJsonBuffer<200> jsonBuffer;
 JsonObject& root = jsonBuffer.createObject();
 char JSONmessageBuffer[300];
 
+StaticJsonBuffer<10000> JsonchartBuffer;
+JsonObject& chart = JsonchartBuffer.createObject();
+char chartMessageBuffer[3000];
+
+JsonArray& chartTime = chart.createNestedArray("time");
+JsonArray& chartTemp = chart.createNestedArray("temp");
+
+
 void setup() {
 	Serial.begin(115200); // This should be different from the Bluetooth baud rate
 	while (!Serial) continue;
-
-
 
 	WiFi.begin(ssid, password); //begin WiFi connection
 	Serial.println("");
@@ -201,6 +208,11 @@ void setup() {
 
 	server.serveStatic("/", SPIFFS, "/index.html");
 
+	server.on("/chart.json", []() {
+		chart.printTo(chartMessageBuffer, sizeof(chartMessageBuffer));
+		Serial.println(chartMessageBuffer);
+		server.send(200, "application/json", chartMessageBuffer);
+	});
 
 	server.on("/data.json", []() {
 		root.printTo(JSONmessageBuffer, sizeof(JSONmessageBuffer));
@@ -240,12 +252,37 @@ void setup() {
 
 void loop() {
 	ArduinoOTA.handle();
+
 	/***************************** MEASURE TEMPERATURE *****************************/
 	temperature = PT_Sensor.temperature(RNOMINAL, RREF);
 	if (temperature > max_temp) max_temp = temperature;
+
 	root["temp"] = temperature;
 	root["max_temp"] = max_temp;
 	root["phase"] = states_name[status];
+	root["time"] = duration / 60;
+
+
+
+	// collect chgart data only when inoperation
+	if (status > idle &&  status < ended) {
+		if (cleararray) {
+			cleararray = false;
+			JsonchartBuffer.clear();
+			//Serial.println("clear array");
+			JsonObject& chart = JsonchartBuffer.createObject();
+			JsonArray& chartTime = chart.createNestedArray("time");
+			JsonArray& chartTemp = chart.createNestedArray("temp");
+		}
+		else {
+			chartTime.add(duration);
+			chartTemp.add(temperature);
+			chart.printTo(Serial);
+		}
+	}
+
+
+
 
 	uint8_t fault = PT_Sensor.readFault();
 
@@ -285,9 +322,9 @@ void loop() {
 		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 		if (temperature >= T_soak) {
 			status = reflow;
-			t_start = millis(); // Reset timer for next phase
 			duration = millis() - t_start; // reset duration for the next phase
 			soak_duration = duration; // record preheat duration
+			t_start = millis(); // Reset timer for next phase
 			myPID.SetTunings(Kp_reflow, Ki_reflow, Kd_reflow); // set tuning for next phase
 			Serial.println("Soaking phase complete : ");
 			Serial.println(preheat_duration);
@@ -303,9 +340,9 @@ void loop() {
 		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 		if (temperature >= T_reflow) {
 			status = cool;
-			t_start = millis(); // Reset timer for next phase
 			duration = millis() - t_start; // reset duration for the next phase
 			reflow_duration = duration; // record preheat duration
+			t_start = millis(); // Reset timer for next phase
 			myPID.SetTunings(Kp_preheat, Ki_preheat, Kd_preheat); // set tuning for next phase
 			Serial.print("Reflow phase complete : ");
 			Serial.println(reflow_duration);
@@ -323,8 +360,9 @@ void loop() {
 		digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 
 		if (temperature <= T_cool) {
-			status = idle;
+			status = ended;
 			cool_duration = millis() - t_start; // reset duration for the next phase
+			t_start = millis(); // Reset timer for next phase
 			Serial.println("Cooling complete : ");
 			Serial.println(cool_duration);
 			Done_Beep(); // Play the buzzer melody
@@ -332,6 +370,12 @@ void loop() {
 		else {
 			digitalWrite(relay, LOW); //cooling - just turn off the heaters.
 			setPoint = 0;
+		}
+		break;
+
+	case ended:
+		if ((millis() - t_start) > 5000) {
+			status = idle;
 		}
 		break;
 
@@ -470,7 +514,15 @@ void phase_beep() {
 
 void toggle_sw() {
 	key_beep = true;
+
 	if (status == idle) {
+
+		//Serial.print("Starting temperature: ");
+		//Serial.print(T_start);
+		//Serial.println(" *C");
+		//status = ended;
+		//t_start = millis(); // Reset timer for next phase
+		cleararray = true;
 		status = preheat;
 		t_start = millis(); // Begin timers
 		windowStartTime = millis();

@@ -5,6 +5,7 @@ enum reflow_state {
 	soak,
 	reflow,
 	cool,
+	ended,
 	rtd_fault
 };
 
@@ -14,4 +15,5 @@ static const char *states_name[] = {
 "soak",
 "reflow",
 "cool",
+"ended",
 "rtd_fault" };

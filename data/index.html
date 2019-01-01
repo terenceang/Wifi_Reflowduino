@@ -41,7 +41,20 @@
             font-size: 50px;
         }
     </style>
+    <!--Load the AJAX API-->
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
     <script type="text/javascript">
+
+        var chartFlag = true;
+        var chartDelay = 0;
+
+        // Load the Visualization API and the piechart package.
+        google.charts.load('current', { 'packages': ['corechart'] });
+
+        // Set a callback to run when the Google Visualization API is loaded.
+        //google.charts.setOnLoadCallback(updateData);
+
         var x = setInterval(function () { loadData("data.json", updateData) }, 1000);
 
         function loadData(url, callback) {
@@ -51,20 +64,86 @@
                     callback.apply(xhttp);
                 }
             };
+            if (!chartDelay--) {
+
+                chartFlag = true;
+            }
+
             xhttp.open("GET", url, true);
             xhttp.send();
         }
 
         function updateData() {
+
             var obj = JSON.parse(this.responseText);
 
             document.getElementById("temp").innerHTML = obj.temp.toFixed(2) + String.fromCharCode(176) + "C";
             document.getElementById("max_temp").innerHTML = obj.max_temp.toFixed(2) + String.fromCharCode(176) + "C";
             document.getElementById("phase").innerHTML = obj.phase;
-        }
+
+            if (obj.phase == "ended" && chartFlag) {
+
+                chartFlag = false;
+                chartDelay = 10;
+
+                $.ajax({
+                    url: "chart.json",
+                    dataType: "json",
+                    success: function (chartData) {
+
+                        var data = new google.visualization.DataTable();
+
+                        data.addColumn('number', 'X');
+                        data.addColumn('number', "Temperature");
+
+                        for (var i = 0; i < chartData.time.length; i++) {
+                            data.addRow([chartData.time[i], chartData.temp[i]]);
+                        }
+
+                        var options = {
+                            hAxis: {
+                                title: 'Time',
+                                textStyle: {
+                                    color: '#01579b',
+                                    fontSize: 20,
+                                    fontName: 'Arial',
+                                    bold: true,
+                                    italic: true
+                                },
+                                titleTextStyle: {
+                                    color: '#01579b',
+                                    fontSize: 16,
+                                    fontName: 'Arial',
+                                    bold: false,
+                                    italic: true
+                                }
+                            },
+                            vAxis: {
+                                title: 'Temperture',
+                                textStyle: {
+                                    color: '#1a237e',
+                                    fontSize: 24,
+                                    bold: true
+                                },
+                                titleTextStyle: {
+                                    color: '#1a237e',
+                                    fontSize: 24,
+                                    bold: true
+                                }
+                            },
+                            colors: ['#a52714', '#097138']
+                        };
+
+                        var chart = new google.visualization.LineChart(document.getElementById('chart_div'));
+                        chart.draw(data, options);
+                    } //sucess
+                }); //ajax
+            } //if
+        } //function
 
     </script>
 </head>
+
 <body>
     <div id="container">
         <h1>Wifi Reflow Toaster</h1>
@@ -80,6 +159,9 @@
                 <td id="phase">idle</td>
             </tr>
         </table>
+        <!--Div that will hold the pie chart-->
+        <div id="chart_div"></div>
     </div>
+
 </body>
 </html>
