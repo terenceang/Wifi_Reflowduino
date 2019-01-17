@@ -77,9 +77,9 @@ Adafruit_MAX31865 PT_Sensor = Adafruit_MAX31865(D4);
 #define preheat_rate 2 // Increase of 1-3 *C/s
 #define T_preheat 125
 #define soak_rate 0.7 // Increase of 0.5-1 *C/s
-#define T_soak 183
+#define T_soak 175
 #define reflow_rate 2 // Increase of 1-3 *C/s
-#define T_reflow 215 - T_const
+#define T_reflow 200 - T_const
 #define cool_rate -4 // Decrease of < 6 *C/s max to prevent thermal shock. Negative sign indicates decrease
 
 //PID todo - move to spiff for tuning
