@@ -25,6 +25,8 @@
 
 #include <Ticker.h>
 #include <ArduinoOTA.h>
+#include <ESP8266mDNS.h>
+#include <WiFiUdp.h>
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
@@ -34,6 +36,7 @@
 #include <PID_v1.h> // Library for PID control
 #include "pitches.h" // Includes the different notes for the buzzer
 #include "states.h"
+
 
 //#define DEBUG
 // Define pins
@@ -46,7 +49,7 @@
 //PT100 Setup
 // Wemos SPI: CS, DI, DO, CLK
 //            D4, D7, D6, D5
-Adafruit_MAX31865 PT_Sensor = Adafruit_MAX31865(D4);
+Adafruit_MAX31865 PT_Sensor = Adafruit_MAX31865(MAX_CS);
 
 #define RREF  430.0 // The value of the Rref resistor. Use 430.0 for PT100 and 4300.0 for PT1000 - 'nominal' 0-degrees-C resistance of the sensor
 #define RNOMINAL  100.0 // 100.0 for PT100, 1000.0 for PT1000
@@ -149,7 +152,7 @@ unsigned int sample_count = 0;
 File f;
 
 void setup() {
-	Serial.begin(115200); // This should be different from the Bluetooth baud rate
+	Serial.begin(74880); // This should be different from the Bluetooth baud rate
 	while (!Serial) continue;
 
 	WiFi.begin(ssid, password); //begin WiFi connection
@@ -170,14 +173,30 @@ void setup() {
 	// Port defaults to 8266
 	// ArduinoOTA.setPort(8266);
 
+	// Set Hostname.
+
 	// Hostname defaults to esp8266-[ChipID]
-	// ArduinoOTA.setHostname("myesp8266");
+	//String hostname = "rOven-" + String(ESP.getChipId(), HEX);
+	//ArduinoOTA.setHostname((const char *)hostname.c_str());
 
 	// No authentication by default
-	// ArduinoOTA.setPassword((const char *)"123");
+	//ArduinoOTA.setPassword((const char *)"YishunLab114");
+
+	// Password can be set with it's md5 value as well
+	// MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+	// ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
 
 	ArduinoOTA.onStart([]() {
-		Serial.println("Start");
+		String type;
+		if (ArduinoOTA.getCommand() == U_FLASH) {
+			type = "sketch";
+		}
+		else { // U_SPIFFS
+			type = "filesystem";
+		}
+
+		// NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+		Serial.println("Start updating " + type);
 	});
 
 	ArduinoOTA.onEnd([]() {
@@ -219,6 +238,7 @@ void setup() {
 
 	server.begin();
 	Serial.println("Web server started!");
+	Serial.println();
 
 #ifdef buzzer
 	pinMode(buzzer, OUTPUT);
@@ -232,7 +252,7 @@ void setup() {
 	pinMode(LED, OUTPUT);
 	pinMode(relay, OUTPUT);
 
-	digitalWrite(LED, LOW);
+	digitalWrite(LED, HIGH); // inverted
 	digitalWrite(relay, LOW); // Set default relay state to OFF
 
 	attachInterrupt(START_SW, toggle_sw, FALLING);
@@ -247,7 +267,7 @@ void setup() {
 	measure_temp.attach(1, measureIsr);//tickerObj.attach(timeInSecs,isrFunction)
 
   //  while (!Serial) delay(1); // OPTIONAL: Wait for serial to connect
-	Serial.println("*****Wifi Reflowduino*****");
+	Serial.println("*****Wifi Reflow Oven*****");
 }
 
 void measureIsr() {
@@ -306,12 +326,12 @@ void loop() {
 		switch (status)
 		{
 		case idle:
-			digitalWrite(LED, LOW); // Red LED indicates reflow is underway
+			digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
 			setPoint = 0;
 			break;
 
 		case preheat:
-			digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+			digitalWrite(LED, LOW); // Red LED indicates reflow is underway
 
 			if (temperature >= T_preheat) { // Check if the current phase was just completed
 				duration = millis() - t_start; // reset duration for the next phase
@@ -333,7 +353,7 @@ void loop() {
 			break;
 
 		case soak:
-			digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+			digitalWrite(LED, LOW); // Red LED indicates reflow is underway
 			if (temperature >= T_soak) {
 				duration = millis() - t_start; // reset duration for the next phase
 				soak_duration = duration/1000; // record preheat duration
@@ -351,7 +371,7 @@ void loop() {
 			break;
 
 		case reflow:
-			digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+			digitalWrite(LED, LOW); // Red LED indicates reflow is underway
 			if (temperature >= T_reflow) {
 				duration = millis() - t_start; // reset duration for the next phase
 				reflow_duration = duration/1000; // record preheat duration
@@ -371,7 +391,7 @@ void loop() {
 			break;
 
 		case cool:
-			digitalWrite(LED, HIGH); // Red LED indicates reflow is underway
+			digitalWrite(LED, LOW); // Red LED indicates reflow is underway
 
 			if (temperature <= T_cool) {
 				duration = millis() - t_start; // reset duration for the next phase
@@ -383,7 +403,7 @@ void loop() {
 				status = save_data;
 			}
 			else {
-				digitalWrite(relay, LOW); //cooling - just turn off the heaters.
+				digitalWrite(relay, HIGH); //cooling - just turn off the heaters.
 				setPoint = 0;
 			}
 			break;
